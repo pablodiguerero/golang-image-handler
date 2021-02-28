@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/chai2010/webp"
 	"github.com/disintegration/imaging"
 	"image-handler.it-lab.su/utils"
 )
@@ -48,6 +49,7 @@ type Image struct {
 	path         ImagePath
 	body         []byte
 	rendition    map[string]string
+    allowedWebp  bool
 }
 
 // ToString - convert handle struct to string
@@ -70,7 +72,11 @@ func (img *Image) GetRelativeNaturalPath() string {
 
 // GetRelativePath - return image path
 func (img *Image) GetRelativePath() string {
-	return fmt.Sprintf("%s/%s.%s.%s", img.path.folder, img.path.name, img.handleMethod.ToString(), img.path.exten)
+    if (img.allowedWebp) {
+        return fmt.Sprintf("%s/%s.%s.%s", img.path.folder, img.path.name, img.handleMethod.ToString(), "webp")
+    } else {
+        return fmt.Sprintf("%s/%s.%s.%s", img.path.folder, img.path.name, img.handleMethod.ToString(), img.path.exten)
+    }
 }
 
 // GetAbsolutePath - return image absolute path
@@ -97,7 +103,6 @@ func (img *Image) Cache() (err error) {
 	var cachePathRelative string = img.GetCachePath()
 
 	if len(utils.GetImageCache()) == 0 || len(img.body) == 0 || len(cachePathRelative) == 0 {
-		log.Println("Prevent caching", len(utils.GetImageCache()) == 0, len(img.body) == 0, len(cachePathRelative) == 0)
 		return
 	}
 
@@ -151,6 +156,12 @@ func (img *Image) PrepareHandling(handleValue string) (err error) {
 	return
 }
 
+// IsAllowedWebp - Is webp supported?
+func (img *Image) IsAllowedWebp() (response bool) {
+    response = img.allowedWebp;
+    return
+}
+
 // Handle - handeled current image
 func (img *Image) Handle() (err error) {
 	var handledImage *image.NRGBA
@@ -189,16 +200,23 @@ func (img *Image) Handle() (err error) {
 	}
 
 	buf := new(bytes.Buffer)
-	err = jpeg.Encode(buf, handledImage, nil)
+
+    if (img.allowedWebp) {
+        err = webp.Encode(buf, handledImage, &webp.Options{Lossless: true})
+    } else {
+	    err = jpeg.Encode(buf, handledImage, nil)
+    }
+
 	img.body = buf.Bytes()
 
 	return
 }
 
 // GetImage - return common image data like bucket, filename, relative path, etc
-func GetImage(path string, name string, handleMethod string, exten string) (elements Image, err error) {
+func GetImage(path string, name string, handleMethod string, exten string, allowedWebp bool) (elements Image, err error) {
 	var localImg Image = Image{
 		path: ImagePath{folder: path, name: name, exten: exten},
+        allowedWebp: allowedWebp,
 	}
 
 	if err = localImg.PrepareHandling(handleMethod); err != nil {

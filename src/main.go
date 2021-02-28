@@ -18,15 +18,18 @@ func (h *fastHTTPHandler) handle(ctx *fasthttp.RequestCtx) {
 		ctx.Write([]byte("Checked"))
 		return
 	} else {
-		re := regexp.MustCompile(`^/images/(.+)/(.+?).([a-z0-9\\-]+).(png|jpg|jpeg)$`)
-		response := re.FindStringSubmatch(string(ctx.Path()))
+		pathRe := regexp.MustCompile(`^/images/(.+)/(.+?).([a-z0-9\\-]+).(png|jpg|jpeg)$`)
+		headerRed := regexp.MustCompile(`(image\/webp)`);
+
+		response := pathRe.FindStringSubmatch(string(ctx.Path()))
+		webpHeader := headerRed.FindStringSubmatch(string(ctx.Request.Header.Peek("Accept")))
 
 		if len(response) == 0 {
 			ctx.Error("Url not found", 404)
 			return
 		}
 
-		image, err := common.GetImage(response[1], response[2], response[3], response[4])
+		image, err := common.GetImage(response[1], response[2], response[3], response[4], len(webpHeader) > 0)
 
 		if err != nil {
 			ctx.Error(fmt.Sprintf("Server error: %q", err.Error()), 500)
@@ -34,7 +37,12 @@ func (h *fastHTTPHandler) handle(ctx *fasthttp.RequestCtx) {
 		}
 
 		if loadCache := image.LoadCache(); loadCache {
-			ctx.SetContentType("image/jpeg")
+			if (image.IsAllowedWebp()) {
+                ctx.SetContentType("image/webp")
+            } else {
+                ctx.SetContentType("image/jpeg")
+            }
+
 			ctx.Write(image.GetBody())
 			return
 		}
@@ -48,7 +56,12 @@ func (h *fastHTTPHandler) handle(ctx *fasthttp.RequestCtx) {
 			fmt.Println(err)
 		}
 
-		ctx.SetContentType("image/jpeg")
+        if (image.IsAllowedWebp()) {
+            ctx.SetContentType("image/webp")
+        } else {
+            ctx.SetContentType("image/jpeg")
+        }
+
 		_, err = ctx.Write(image.GetBody())
 
 		if err != nil {
