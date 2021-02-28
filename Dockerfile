@@ -10,3 +10,4 @@ RUN mkdir /app
 COPY --from=builder /app/main.out /app/main.out
 
 CMD ["/app/main.out"]
+EXPOSE 80

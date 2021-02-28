@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-var defaultPort int = 8001
+var defaultPort int = 80
 var imageRoot string
 
 func init() {

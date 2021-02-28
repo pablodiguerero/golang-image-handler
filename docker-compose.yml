@@ -1,0 +1,19 @@
+version: "3"
+services:
+  nginx:
+    image: nginx:latest
+    volumes:
+      - "./nginx.conf:/etc/nginx/nginx.conf"
+    ports:
+      - "8000:80"
+
+  application:
+    build:
+      dockerfile: Dockerfile
+      context: .
+    volumes:
+      - "./data/img:/images"
+      - "./data/cache:/cache"
+    environment:
+      - "APP_IMAGE_ROOT=/images"
+      - "APP_IMAGE_CACHE=/cache"
