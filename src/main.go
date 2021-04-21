@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 
 	"github.com/valyala/fasthttp"
@@ -22,14 +23,14 @@ func (h *fastHTTPHandler) handle(ctx *fasthttp.RequestCtx) {
 		headerRed := regexp.MustCompile(`(image\/webp)`);
 
 		response := pathRe.FindStringSubmatch(string(ctx.Path()))
-		webpHeader := headerRed.FindStringSubmatch(string(ctx.Request.Header.Peek("Accept")))
+		webpHeader := os.Getenv("APP_DISABLE_WEBP") == "1" && len(headerRed.FindStringSubmatch(string(ctx.Request.Header.Peek("Accept")))) > 0
 
 		if len(response) == 0 {
 			ctx.Error("Url not found", 404)
 			return
 		}
 
-		image, err := common.GetImage(response[1], response[2], response[3], response[4], len(webpHeader) > 0)
+		image, err := common.GetImage(response[1], response[2], response[3], response[4], webpHeader)
 
 		if err != nil {
 			ctx.Error(fmt.Sprintf("Server error: %q", err.Error()), 500)
