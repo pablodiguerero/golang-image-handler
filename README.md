@@ -12,14 +12,14 @@ Golang-based service to handling image "on the fly"
 
 ## Supported url formats
 
-* Template: **/images/\<basename>.fill-\<width>x\<height>.\<extension>**
-  
+- Template: **/images/\<basename>.fill-\<width>x\<height>.\<extension>**
+
   Example: **/images/awesomeimage.fill-200x200.jpg**
 
-* Template: **/images/\<basename>.fit-\<width>x\<height>.\<extension>**
-  
+- Template: **/images/\<basename>.fit-\<width>x\<height>.\<extension>**
+
   Example: **/images/awesomeimage.fill-200x200.jpg**
 
-* Template: **/images/\<basename>.fitstrict-\<width>x\<height>.\<extension>**
-  
+- Template: **/images/\<basename>.fitstrict-\<width>x\<height>.\<extension>**
+
   Example: **/images/awesomeimage.fitstrict-200x200.jpg**

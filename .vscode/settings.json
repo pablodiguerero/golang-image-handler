@@ -1,18 +1,21 @@
 {
-    "editor.codeActionsOnSave": {},
-    "go.testOnSave": true,
-    "go.lintOnSave": "package",
-    "go.formatTool": "goimports",
-    "go.testFlags": [
-        "-v"
-    ],
-    "go.autocompleteUnimportedPackages": true,
-    "[go]": {
-        "editor.formatOnSave": true,
-        "editor.codeActionsOnSave": {
-            "source.organizeImports": true
-        }
-    },
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
+  "editor.codeActionsOnSave": {},
+  "go.testOnSave": true,
+  "go.lintOnSave": "package",
+  "go.formatTool": "goimports",
+  "go.testFlags": ["-v", "-count=1"],
+  "go.testEnvVars": {
+    "LOG_LEVEL": "debug",
+    "APP_IMAGE_ROOT": "/Users/pavel/IdeaProjects/golang-image-handler/data/media",
+    "APP_IMAGE_CACHE": "/Users/pavel/IdeaProjects/golang-image-handler/data/cached"
+  },
+  "go.autocompleteUnimportedPackages": true,
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": true
+    }
+  },
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true
 }
