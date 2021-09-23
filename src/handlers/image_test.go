@@ -1,32 +1,50 @@
 package handlers_test
 
 import (
-	"io"
-	"net/http/httptest"
-	"testing"
+    "io"
+    "net/http/httptest"
+    "testing"
 
-	"github.com/stretchr/testify/assert"
-	"image.it-lab.su/handlers"
+    "image.it-lab.su/handlers"
 )
 
-func TestImageResponse(t *testing.T) {
-    request := httptest.NewRequest("GET", "/images/files/cover-1-fill-300x900.jpg", nil)
-    writer := httptest.NewRecorder()
-
-    handlers.ImageHandler(writer, request)
-    resp := writer.Result()
-    body, _ := io.ReadAll(resp.Body)
-
-    t.Log(resp.Header["Content-Length"])
-    t.Logf("Got body with len: %d byte(s)", len(body))
+type TestCase struct {
+    url       string
+    wepSupprt bool
 }
 
-func TestImageBadResponse(t *testing.T) {
-    request := httptest.NewRequest("GET", "/images/files/not-exists-fill-450x800.jpg", nil)
-    writer := httptest.NewRecorder()
+type TestCases []TestCase
 
-    handlers.ImageHandler(writer, request)
-    resp := writer.Result()
+func TestImageResponse(t *testing.T) {
+    cases := TestCases{
+        TestCase{url: "/images/files/realty-fill-1000x1000.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fill-1000x1000-q90.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fit-800x800.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fit-800x800-q90.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fitstrict-800x800.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fitstrict-800x800-q90.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fill-1000x1000.jpg", wepSupprt: false},
+        TestCase{url: "/images/files/realty-fill-1000x1000-q90.jpg", wepSupprt: true},
+        TestCase{url: "/images/files/realty-fit-800x800.jpg", wepSupprt: true},
+        TestCase{url: "/images/files/realty-fit-800x800-q90.jpg", wepSupprt: true},
+        TestCase{url: "/images/files/realty-fitstrict-800x800.jpg", wepSupprt: true},
+        TestCase{url: "/images/files/realty-fitstrict-800x800-q90.jpg", wepSupprt: true},
+    }
 
-    assert.Equal(t, resp.StatusCode, 404)
+    for i := 0; i < len(cases); i++ {
+        request := httptest.NewRequest("GET", cases[i].url, nil)
+
+        if cases[i].wepSupprt {
+            request.Header.Add("Accept", "image/WeBp")
+        }
+
+        writer := httptest.NewRecorder()
+
+        handlers.ImageHandler(writer, request)
+        resp := writer.Result()
+        body, _ := io.ReadAll(resp.Body)
+
+        t.Log(resp.Header["Content-Length"])
+        t.Logf("Got body with len: %d byte(s)", len(body))
+    }
 }

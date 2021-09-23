@@ -12,8 +12,11 @@ services:
       dockerfile: Dockerfile
       context: .
     volumes:
-      - "./data/img:/images"
+      - "./data/media:/images"
       - "./data/cache:/cache"
+    ports:
+      - "8001:80"
     environment:
+      - "APP_ALLOW_WEBP=1"
       - "APP_IMAGE_ROOT=/images"
       - "APP_IMAGE_CACHE=/cache"

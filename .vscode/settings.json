@@ -2,10 +2,11 @@
   "editor.codeActionsOnSave": {},
   "go.testOnSave": true,
   "go.lintOnSave": "package",
-  "go.formatTool": "goimports",
+  "go.formatTool": "goformat",
   "go.testFlags": ["-v", "-count=1"],
   "go.testEnvVars": {
     "LOG_LEVEL": "debug",
+    "APP_ALLOW_WEBP": "1",
     "APP_IMAGE_ROOT": "/Users/pavel/IdeaProjects/golang-image-handler/data/media",
     "APP_IMAGE_CACHE": "/Users/pavel/IdeaProjects/golang-image-handler/data/cached"
   },
@@ -16,6 +17,6 @@
       "source.organizeImports": true
     }
   },
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.defaultFormatter": "golang.go",
   "editor.formatOnSave": true
 }

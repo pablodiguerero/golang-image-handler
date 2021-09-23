@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-	"os"
+    "fmt"
+    "net/http"
+    "os"
 
-	"image.it-lab.su/handlers"
+    "image.it-lab.su/handlers"
 )
 
 func main() {
@@ -16,8 +16,7 @@ func main() {
     }
 
     mux := http.ServeMux{}
-
-    mux.HandleFunc("/health/", handlers.HealthcheckHandler)
+    mux.HandleFunc("/health-check/", handlers.HealthCheckHandler)
     mux.HandleFunc("/images/", handlers.ImageHandler)
 
     http.ListenAndServe(fmt.Sprintf(":%s", port), &mux)

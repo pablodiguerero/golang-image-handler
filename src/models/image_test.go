@@ -1,66 +1,65 @@
 package models_test
 
 import (
-	"os"
-	"testing"
-	"time"
+    "testing"
+    "time"
 
-	"github.com/stretchr/testify/assert"
-	"image.it-lab.su/models"
+    "github.com/stretchr/testify/assert"
+    "image.it-lab.su/models"
 )
 
-func TestImageHandlingWoCache(t *testing.T) {
-	start := time.Now()
+func TestImageConveter(t *testing.T) {
+    cases := TestCases{
+        TestCase{fileUrl: "files/realty-fill-1000x1000.jpg", wepSupprt: false},
+        TestCase{fileUrl: "files/realty-fill-800x800-q60.jpg", wepSupprt: false},
+        TestCase{fileUrl: "files/realty-fill-800x800-q90.jpg", wepSupprt: false},
+        TestCase{fileUrl: "files/realty-fill-1000x1000.jpg", wepSupprt: true},
+        TestCase{fileUrl: "files/realty-fill-800x800-q60.jpg", wepSupprt: true},
+        TestCase{fileUrl: "files/realty-fill-800x800-q90.jpg", wepSupprt: true},
+    }
 
-	image, err := models.LoadImage("files/realty-fill-100x100.jpg")
-	assert.Nil(t, err)
+    for i := 0; i < len(cases); i++ {
+        start := time.Now()
 
-	path := image.MakeCachedImage()
-	assert.Nil(t, err)
+        image := models.LoadImage(cases[i].fileUrl, cases[i].wepSupprt)
+        file, err := image.LoadCached()
 
-	_, err = os.Stat(path)
-	assert.Nil(t, err)
+        if err != nil {
+            path, _ := image.MakeCachedImage()
+            t.Log(path)
+        } else {
+            t.Log(file)
+        }
 
-	elapsed := time.Since(start)
-	t.Logf("Binomial took %s", elapsed)
+        elapsed := time.Since(start)
+        t.Logf("Binomial took %s", elapsed)
+    }
 }
 
-func TestImageHandlingWithCache(t *testing.T) {
-	start := time.Now()
+func TestImage(t *testing.T) {
+    defer func() {
+        if err := recover(); err != nil {
+            t.Log(err)
+            assert.NotNil(t, err)
+        }
+    }()
 
-	image, err := models.LoadImage("files/realty-fill-720x900.jpg")
-	assert.Nil(t, err)
-
-	path := image.Parser.GetCachedJpgPath()
-	if stat, err := os.Stat(path); os.IsNotExist(err) {
-		t.Log("File does not exists, creating")
-		_ = image.MakeCachedImage()
-	} else {
-		t.Logf("File size is %d kb", stat.Size() / 1024)
-	}
-
-	assert.Nil(t, err)
-
-	elapsed := time.Since(start)
-	t.Logf("Binomial took %s", elapsed)
-}
-
-func TestWebpImage(t *testing.T) {
+    /**
+     * Testing jpg / png images
+     */
     start := time.Now()
 
-    image, err := models.LoadImage("files/cover-fill-720x900.webp")
-    assert.Nil(t, err)
+    models.LoadImage("files/realty-fill-100x100.jpg")
 
-    path := image.Parser.GetCachedWebpPath()
-    if stat, err := os.Stat(path); os.IsNotExist(err) {
-		t.Log("File does not exists, creating")
-		_ = image.MakeCachedImage()
-	} else {
-		t.Logf("File size is %d kb", stat.Size() / 1024)
-	}
+    elapsed := time.Since(start)
+    t.Logf("Binomial took %s", elapsed)
 
-	assert.Nil(t, err)
+    /**
+     * Testing webp support
+     */
+    start = time.Now()
+    models.LoadImage("files/fake-realty-fill-100x100.jpg", true)
 
-	elapsed := time.Since(start)
-	t.Logf("Binomial took %s", elapsed)
+    elapsed = time.Since(start)
+    t.Logf("Binomial took %s", elapsed)
 }
