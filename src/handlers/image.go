@@ -38,7 +38,13 @@ func ImageHandler(writer http.ResponseWriter, request *http.Request) {
     imagePath := image.Parser.GetCachePath()
 
     if _, err := os.Stat(imagePath); os.IsNotExist(err) {
-        imagePath, _ = image.MakeCachedImage()
+        var cacheErr error
+        imagePath, cacheErr = image.MakeCachedImage()
+
+        if cacheErr != nil {
+            log.Fatal("Failed to write cache: ", cacheErr.Error())
+            panic(cacheErr)
+        }
     }
 
     if image.Parser.AllowedWebp {
