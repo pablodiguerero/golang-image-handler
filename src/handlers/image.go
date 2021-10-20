@@ -7,6 +7,8 @@ import (
     "os"
     "regexp"
 
+    ua "github.com/mileusna/useragent"
+
     "image.it-lab.su/models"
 )
 
@@ -28,7 +30,9 @@ func ImageHandler(writer http.ResponseWriter, request *http.Request) {
     reWebp := regexp.MustCompile(`(?i)image/(webp)`)
     regexpWebpResult := reWebp.FindStringSubmatch(request.Header.Get("Accept"))
 
-    webpSupported := len(regexpWebpResult) > 1
+    userAgent := ua.Parse(request.Header.Get("User-Agent"))
+
+    webpSupported := os.Getenv("APP_ALLOW_WEBP") == "1" && !userAgent.IsSafari() && len(regexpWebpResult) > 1
 
     if len(regexpPathResult) < 2 {
         panic(errors.New("WrongURL"))
