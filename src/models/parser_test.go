@@ -17,7 +17,7 @@ type TestCases []TestCase
 
 func TestParser(t *testing.T) {
     cases := TestCases{
-        TestCase{fileUrl: "files/realty-fill-100x100.jpg", wepSupprt: false},
+        TestCase{fileUrl: "files/foto_Demidova_S.Yu.-fill-800x600.jpg", wepSupprt: false},
         TestCase{fileUrl: "files/realty-fill-100x100-q60.jpg", wepSupprt: false},
         TestCase{fileUrl: "files/realty-fill-100x100-q90.jpg", wepSupprt: false},
         TestCase{fileUrl: "files/realty-fill-100x100.jpg", wepSupprt: true},

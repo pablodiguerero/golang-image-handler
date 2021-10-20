@@ -57,7 +57,7 @@ func ParsePath(path string, allowedWebp ...bool) (ParseResult, error) {
         allowedWebpLocal = allowedWebp[0]
     }
 
-    re := regexp.MustCompile(`(?i)(.+)\/([a-z0-9_\-]+)\-(fill|fit|fitstrict)\-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|png|jpeg|webp)$`)
+    re := regexp.MustCompile(`(?i)(.+)\/([a-z0-9_\-\.]+)\-(fill|fit|fitstrict)\-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|png|jpeg|webp)$`)
     regexpResult := re.FindStringSubmatch(path)
 
     if len(regexpResult) != 8 {
