@@ -1,19 +1,87 @@
-name: Publish Docker image
+name: CI and publish container image
+
 on:
+  pull_request:
+  push:
+    branches: [master]
+    tags: ['v*']
   release:
     types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  push_to_registries:
-    name: Push Docker image to multiple registries
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the repo
-        uses: actions/checkout@v2
-      - name: Push to GitHub Packages
-        uses: docker/build-push-action@v1
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
+          go-version-file: src/go.mod
+      - name: Run tests
+        working-directory: src
+        run: go test -race ./...
+      - name: Build container image
+        run: docker build --tag image-handler:test .
+      - name: Smoke-test AVIF transformation in the container
+        run: |
+          docker run --rm --entrypoint sh image-handler:test -ec '
+            mkdir -p /images /cache
+            vips black /images/source.png 20 10
+            APP_IMAGE_ROOT=/images APP_IMAGE_CACHE=/cache image-handler &
+            app_pid=$!
+            trap "kill $app_pid" EXIT
+            for attempt in 1 2 3 4 5; do
+              wget -qO /dev/null http://127.0.0.1:80/health-check/ && break
+              sleep 1
+            done
+            wget -qO /tmp/result.avif --header="Accept: image/avif" http://127.0.0.1:80/images/source-fit-10x10.png
+            test -s /tmp/result.avif
+            vipsheader -f width /tmp/result.avif | grep -x 10
+            vipsheader -f height /tmp/result.avif | grep -x 5
+          '
+
+  publish:
+    name: Build and publish
+    needs: test
+    if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb # v3.3.0
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@e92390c5fb421da1463c202d546fed0ec5c39f20 # v3.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.CI_TOKEN }}
-          registry: docker.pkg.github.com
-          repository: pablodiguerero/golang-image-handler/image-handler
-          tag_with_ref: true
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

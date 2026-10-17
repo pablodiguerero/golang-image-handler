@@ -1,23 +1,35 @@
 package main
 
 import (
-    "fmt"
-    "net/http"
-    "os"
+	"log"
+	"net/http"
+	"os"
+	"time"
 
-    "image.it-lab.su/handlers"
+	"image.it-lab.su/internal/imagehandler"
 )
 
 func main() {
-    port := os.Getenv("APP_PORT")
+	handler, err := imagehandler.NewFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    if port == "" {
-        port = "80"
-    }
+	port := os.Getenv("APP_PORT")
+	if port == "" {
+		port = "80"
+	}
 
-    mux := http.ServeMux{}
-    mux.HandleFunc("/health-check/", handlers.HealthCheckHandler)
-    mux.HandleFunc("/images/", handlers.ImageHandler)
+	mux := http.NewServeMux()
+	mux.Handle("/images/", handler)
+	mux.HandleFunc("/health-check/", handler.HealthCheck)
 
-    http.ListenAndServe(fmt.Sprintf(":%s", port), &mux)
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Printf("image handler listening on %s", server.Addr)
+	log.Fatal(server.ListenAndServe())
 }
