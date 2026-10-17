@@ -38,6 +38,21 @@ The extension identifies the source file. Response format is negotiated from `Ac
 | `APP_CACHE_TTL_SECONDS` | `604800` | Delete generated variants older than this age. |
 | `APP_CACHE_CLEANUP_INTERVAL_SECONDS` | `86400` | Run generated-cache cleanup once per day. |
 | `APP_CACHE_MAX_BYTES` | `10737418240` | Evict oldest generated variants after this size. |
+| `APP_ADMIN_TOKEN` or `APP_ADMIN_TOKEN_FILE` | unset | Enables the protected cache administration API. |
+| `APP_ADMIN_MAX_PATHS` | `500` | Maximum paths in one cache administration request. |
+| `APP_ADMIN_WARM_WORKERS` | transform limit | Concurrent warm tasks; transform concurrency remains capped independently. |
+
+## Cache administration API
+
+Set `APP_ADMIN_TOKEN_FILE` to a container secret. The API is disabled when no token is configured. It accepts only authenticated `POST` requests with `Authorization: Bearer <token>` and is intended for an internal network.
+
+`POST /admin/cache/keys` accepts a JSON body such as:
+
+```json
+{"paths":["/images/media/item_images/racquet.fitstrict-250x250.jpg"],"formats":["jpg","webp","avif"]}
+```
+
+It returns the versioned cache key and current presence for every requested variant. `POST /admin/cache/warm` uses the same body and materializes missing variants. It shares the normal transform limit, so a warm-up cannot exceed the handler's configured CPU and memory budget.
 
 The handler incorporates source size and modification time into every cache key. It writes via a private temporary directory and atomic rename, so incomplete files are never served. Concurrent requests for the same missing key wait for one transform instead of creating duplicate work. A lightweight Go goroutine runs on startup and then once every 24 hours to remove generated variants older than seven days; it also evicts the oldest variants when the generated cache exceeds 10 GiB.
 

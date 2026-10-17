@@ -43,7 +43,7 @@ jobs:
             mkdir -p /images/media/homepage_images_body
             vips black /images/source.png 20 10
             vips black "/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg" 20 10
-            APP_IMAGE_ROOT=/images APP_IMAGE_CACHE=/cache image-handler &
+            APP_IMAGE_ROOT=/images APP_IMAGE_CACHE=/cache APP_ADMIN_TOKEN=test-admin-token image-handler &
             app_pid=$!
             trap "kill $app_pid" EXIT
             for attempt in 1 2 3 4 5; do
@@ -58,6 +58,8 @@ jobs:
             vipsheader -f width /tmp/original.jpg | grep -x 20
             vipsheader -f height /tmp/original.jpg | grep -x 10
             test "$(find /cache/v2 -type f | wc -l)" -eq 2
+            wget -qO /tmp/cache-keys --header="Authorization: Bearer test-admin-token" --post-data='{"paths":["/images/source-fit-10x10.png"],"formats":["webp"]}' http://127.0.0.1:80/admin/cache/keys
+            grep -q '"cached"' /tmp/cache-keys
           '
 
   publish:

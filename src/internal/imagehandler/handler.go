@@ -52,6 +52,9 @@ type Handler struct {
 	cacheTTL        time.Duration
 	cacheMaxBytes   int64
 	cleanupEvery    time.Duration
+	adminToken      string
+	adminMaxPaths   int
+	adminWorkers    int
 	semaphore       chan struct{}
 	transform       transformFunc
 	sourcePixels    sourcePixelsFunc
@@ -108,6 +111,10 @@ func NewFromEnv() (*Handler, error) {
 	cacheTTL := positiveEnvDuration("APP_CACHE_TTL_SECONDS", 7*24*time.Hour)
 	cleanupEvery := positiveEnvDuration("APP_CACHE_CLEANUP_INTERVAL_SECONDS", 24*time.Hour)
 	cacheMaxBytes := int64(positiveEnvInt("APP_CACHE_MAX_BYTES", 10*1024*1024*1024))
+	adminToken, err := valueFromEnvOrFile("APP_ADMIN_TOKEN")
+	if err != nil {
+		return nil, err
+	}
 	accelPrefix := strings.TrimSuffix(os.Getenv("APP_ACCEL_REDIRECT_PREFIX"), "/")
 	if accelPrefix != "" && (!strings.HasPrefix(accelPrefix, "/") || strings.Contains(accelPrefix, "..")) {
 		return nil, errors.New("APP_ACCEL_REDIRECT_PREFIX must be an absolute URL path")
@@ -128,6 +135,9 @@ func NewFromEnv() (*Handler, error) {
 		cacheTTL:        cacheTTL,
 		cacheMaxBytes:   cacheMaxBytes,
 		cleanupEvery:    cleanupEvery,
+		adminToken:      adminToken,
+		adminMaxPaths:   positiveEnvInt("APP_ADMIN_MAX_PATHS", 500),
+		adminWorkers:    positiveEnvInt("APP_ADMIN_WARM_WORKERS", concurrency),
 		semaphore:       make(chan struct{}, concurrency),
 		transform:       transformImage,
 		sourcePixels:    vipsImagePixels,
@@ -137,6 +147,21 @@ func NewFromEnv() (*Handler, error) {
 	h.stopCleanup = cancel
 	go h.runCleanup(cleanupCtx)
 	return h, nil
+}
+
+func valueFromEnvOrFile(name string) (string, error) {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value, nil
+	}
+	path := strings.TrimSpace(os.Getenv(name + "_FILE"))
+	if path == "" {
+		return "", nil
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	return strings.TrimSpace(string(value)), nil
 }
 
 func positiveEnvInt(name string, fallback int) int {
