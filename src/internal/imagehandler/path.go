@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -28,6 +29,20 @@ type requestSpec struct {
 }
 
 func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error) {
+	// net/http and a reverse proxy may each decode a request path once. Existing
+	// templates also contain paths escaped twice (for example %25D0%25A2...).
+	// Decode at most two remaining layers before validation and file resolution.
+	// Validation below still rejects traversal introduced by either decoding.
+	for range 2 {
+		decodedPath, err := url.PathUnescape(urlPath)
+		if err != nil {
+			break // A literal percent sign in a legacy filename is valid.
+		}
+		if decodedPath == urlPath {
+			break
+		}
+		urlPath = decodedPath
+	}
 	if !strings.HasPrefix(urlPath, "/images/") {
 		return requestSpec{}, errInvalidPath
 	}
