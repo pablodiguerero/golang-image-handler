@@ -1,7 +1,9 @@
 package imagehandler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -39,6 +41,47 @@ func testHandler(t *testing.T) (*Handler, string) {
 		timeout: time.Minute, semaphore: make(chan struct{}, 2), inflight: make(map[string]*call),
 		sourcePixels: func(context.Context, string) (int64, error) { return 1, nil },
 	}, source
+}
+
+func TestAdminCacheKeysAndWarm(t *testing.T) {
+	h, _ := testHandler(t)
+	h.adminToken = "test-token"
+	h.adminMaxPaths = 5
+	h.adminWorkers = 2
+	var transforms atomic.Int32
+	h.transform = func(_ context.Context, _, output string, _ requestSpec, format outputFormat) error {
+		transforms.Add(1)
+		return os.WriteFile(output, []byte("encoded "+string(format)), 0644)
+	}
+	body := []byte(`{"paths":["/images/files/realty-fit-100x100.jpg"],"formats":["jpg","webp"]}`)
+
+	unauthorized := httptest.NewRecorder()
+	h.AdminCacheKeys(unauthorized, httptest.NewRequest(http.MethodPost, "/admin/cache/keys", bytes.NewReader(body)))
+	if unauthorized.Code != http.StatusNotFound {
+		t.Fatalf("unauthorized keys status=%d", unauthorized.Code)
+	}
+
+	warmRequest := httptest.NewRequest(http.MethodPost, "/admin/cache/warm", bytes.NewReader(body))
+	warmRequest.Header.Set("Authorization", "Bearer test-token")
+	warm := httptest.NewRecorder()
+	h.AdminWarmCache(warm, warmRequest)
+	if warm.Code != http.StatusOK || transforms.Load() != 2 {
+		t.Fatalf("warm status=%d transforms=%d body=%q", warm.Code, transforms.Load(), warm.Body.String())
+	}
+	var response struct {
+		Results []adminResult `json:"results"`
+	}
+	if err := json.Unmarshal(warm.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || len(response.Results[0].Variants) != 2 {
+		t.Fatalf("unexpected warm response: %+v", response)
+	}
+	for _, variant := range response.Results[0].Variants {
+		if !variant.Cached || variant.Key == "" {
+			t.Fatalf("variant was not cached: %+v", variant)
+		}
+	}
 }
 
 func TestHandlerRejectsOversizedOriginal(t *testing.T) {

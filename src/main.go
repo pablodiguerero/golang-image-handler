@@ -23,6 +23,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/images/", handler)
 	mux.HandleFunc("/health-check/", handler.HealthCheck)
+	if handler.AdminEnabled() {
+		mux.HandleFunc("/admin/cache/keys", handler.AdminCacheKeys)
+		mux.HandleFunc("/admin/cache/warm", handler.AdminWarmCache)
+	}
 
 	server := &http.Server{
 		Addr:              ":" + port,
