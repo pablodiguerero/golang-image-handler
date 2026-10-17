@@ -17,6 +17,7 @@ func TestParsePathLegacyAndModern(t *testing.T) {
 		{"/images/public+2026/backup@work/photo-fit-100x100.jpg", "public+2026/backup@work/photo.jpg", "fit", 100},
 		{"/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.fitstrict-150x150.jpg", "media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg", "fitstrict", 100},
 		{"/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.original.jpg", "media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg", "original", 100},
+		{"/images/media/homepage_images/%25D0%25A2%25D0%25B5%25D0%25BD%25D0%25BD%25D0%25B8%25D1%2581%25D0%25BD%25D1%258B%25D0%25B5_%25D1%2580%25D0%25B0%25D0%25BA%25D0%25B5%25D1%2582%25D0%25BA%25D0%25B8_Wilson_%25D0%25BA%25D1%2583%25D0%25BF%25D0%25B8%25D1%2582%25D1%258C_.fill-900x700.jpg", "media/homepage_images/Теннисные_ракетки_Wilson_купить_.jpg", "fill", 100},
 	}
 	for _, test := range tests {
 		spec, err := parsePath(test.path, 8192, 40_000_000)
@@ -41,6 +42,7 @@ func TestParsePathRejectsUnsafeOrUnboundedRequests(t *testing.T) {
 		"/images/files/secret-fill-100x100-q101.jpg",
 		"/images/files/secret-fill-100x100.svg",
 		"/images/files/.original.jpg",
+		"/images/%252e%252e/secret-fill-100x100.jpg",
 	}
 	for _, path := range paths {
 		if _, err := parsePath(path, 8192, 40_000_000); err == nil {
