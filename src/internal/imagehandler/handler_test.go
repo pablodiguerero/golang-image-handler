@@ -2,6 +2,7 @@ package imagehandler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,9 +35,82 @@ func testHandler(t *testing.T) (*Handler, string) {
 	}
 	return &Handler{
 		root: root, cache: cache, allowAVIF: true, allowWebP: true,
-		maxDimension: 8192, maxPixels: 40_000_000, maxSourceSize: 50 << 20,
+		maxDimension: 8192, maxPixels: 40_000_000, maxSourceSize: 50 << 20, maxSourcePixels: 40_000_000, maxOutputBytes: 50 << 20,
 		timeout: time.Minute, semaphore: make(chan struct{}, 2), inflight: make(map[string]*call),
+		sourcePixels: func(context.Context, string) (int64, error) { return 1, nil },
 	}, source
+}
+
+func TestHandlerRejectsOversizedOriginal(t *testing.T) {
+	h, _ := testHandler(t)
+	h.maxSourcePixels = 10
+	h.sourcePixels = func(context.Context, string) (int64, error) { return 11, nil }
+	h.transform = func(context.Context, string, string, requestSpec, outputFormat) error {
+		t.Fatal("oversized original reached the transformer")
+		return nil
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/images/files/realty.original.jpg", nil))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerRejectsOversizedOutput(t *testing.T) {
+	h, _ := testHandler(t)
+	h.maxOutputBytes = 3
+	h.transform = func(_ context.Context, _, output string, _ requestSpec, _ outputFormat) error {
+		return os.WriteFile(output, []byte("four"), 0644)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/images/files/realty-fit-100x100.jpg", nil))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
+func TestCopySourceHonoursCancelledContext(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source.jpg")
+	if err := os.WriteFile(source, []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := copySource(ctx, root, base, source, 1024); !errors.Is(err, context.Canceled) {
+		t.Fatalf("copySource error = %v, want context cancellation", err)
+	}
+}
+
+func TestCopySourceRejectsSymlinkOutsideRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "outside.jpg")
+	if err := os.WriteFile(outside, []byte("secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "source.jpg")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := copySource(context.Background(), root, base, link, 1024); err == nil {
+		t.Fatal("copySource accepted a symlink outside image root")
+	}
 }
 
 func TestHandlerCachesNegotiatedVariantsAndInvalidatesSource(t *testing.T) {
@@ -80,6 +154,33 @@ func TestHandlerCachesNegotiatedVariantsAndInvalidatesSource(t *testing.T) {
 	}
 }
 
+func TestHandlerSupportsUnicodeAndOriginalURLs(t *testing.T) {
+	h, _ := testHandler(t)
+	filename := "Сумка_Wilson_RF_Tournament_9PK_Black______.jpg"
+	if err := os.WriteFile(filepath.Join(h.root, "files", filename), []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var specs []requestSpec
+	h.transform = func(_ context.Context, _, output string, spec requestSpec, _ outputFormat) error {
+		specs = append(specs, spec)
+		return os.WriteFile(output, []byte("encoded"), 0644)
+	}
+	urls := []string{
+		"/images/files/Сумка_Wilson_RF_Tournament_9PK_Black______.fitstrict-150x150.jpg",
+		"/images/files/Сумка_Wilson_RF_Tournament_9PK_Black______.original.jpg",
+	}
+	for _, url := range urls {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, url, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%q", url, w.Code, w.Body.String())
+		}
+	}
+	if len(specs) != 2 || specs[0].operation != "fitstrict" || specs[1].operation != "original" {
+		t.Fatalf("unexpected transform specs: %+v", specs)
+	}
+}
+
 func TestCacheKeyChangesForSameSizeAndRestoredMtime(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "source.jpg")
 	if err := os.WriteFile(path, []byte("first source"), 0644); err != nil {
@@ -100,8 +201,24 @@ func TestCacheKeyChangesForSameSizeAndRestoredMtime(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := requestSpec{sourceRelative: "source.jpg", operation: "fit", width: 100, height: 100, quality: 80}
-	if cacheKey(spec, formatJPEG, first) == cacheKey(spec, formatJPEG, second) {
+	if cacheKey(spec, formatJPEG, first, 80_000_000, 50<<20) == cacheKey(spec, formatJPEG, second, 80_000_000, 50<<20) {
 		t.Fatal("same-size source update with restored mtime did not change cache key")
+	}
+}
+
+func TestOriginalCacheKeyIncludesPixelLimit(t *testing.T) {
+	info := testFileInfo{sys: testStat{Dev: 1, Ino: 2, Ctim: 3}}
+	spec := requestSpec{sourceRelative: "source.jpg", operation: "original", quality: 100}
+	if cacheKey(spec, formatJPEG, info, 10, 50<<20) == cacheKey(spec, formatJPEG, info, 20, 50<<20) {
+		t.Fatal("original cache key ignores source pixel limit")
+	}
+}
+
+func TestCacheKeyIncludesOutputLimit(t *testing.T) {
+	info := testFileInfo{sys: testStat{Dev: 1, Ino: 2, Ctim: 3}}
+	spec := requestSpec{sourceRelative: "source.jpg", operation: "fit", width: 100, height: 100, quality: 100}
+	if cacheKey(spec, formatJPEG, info, 40_000_000, 10) == cacheKey(spec, formatJPEG, info, 40_000_000, 20) {
+		t.Fatal("cache key ignores output byte limit")
 	}
 }
 

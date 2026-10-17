@@ -12,7 +12,10 @@ import (
 
 // Both separators are accepted. Early deployments documented the dot form
 // (photo.fill-200x200.jpg), while deployed versions also use a hyphen.
-var filePattern = regexp.MustCompile(`(?i)^([a-z0-9_.-]+)[.-](fill|fit|fitstrict)-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|jpeg|png|webp|avif)$`)
+// A basename may contain Unicode: media libraries commonly retain the
+// uploader's filename (for example, a Cyrillic product name).
+var transformedFilePattern = regexp.MustCompile(`(?i)^(.+)[.-](fill|fit|fitstrict)-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|jpeg|png|webp|avif)$`)
+var originalFilePattern = regexp.MustCompile(`(?i)^(.+)\.original\.(jpg|jpeg|png|webp|avif)$`)
 
 var errInvalidPath = errors.New("invalid image path")
 
@@ -38,8 +41,23 @@ func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error)
 			return requestSpec{}, errInvalidPath
 		}
 	}
-	match := filePattern.FindStringSubmatch(parts[len(parts)-1])
+	filename := parts[len(parts)-1]
+	if match := originalFilePattern.FindStringSubmatch(filename); match != nil {
+		if !safeBasename(match[1]) {
+			return requestSpec{}, errInvalidPath
+		}
+		parts[len(parts)-1] = match[1] + "." + match[2]
+		return requestSpec{
+			sourceRelative: path.Join(parts...),
+			operation:      "original",
+			quality:        100,
+		}, nil
+	}
+	match := transformedFilePattern.FindStringSubmatch(filename)
 	if match == nil {
+		return requestSpec{}, errInvalidPath
+	}
+	if !safeBasename(match[1]) {
 		return requestSpec{}, errInvalidPath
 	}
 	width, err := strconv.Atoi(match[3])
@@ -65,6 +83,10 @@ func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error)
 		height:         height,
 		quality:        quality,
 	}, nil
+}
+
+func safeBasename(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsRune(name, 0)
 }
 
 func safeSegment(segment string) bool {
