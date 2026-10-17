@@ -36,11 +36,13 @@ jobs:
         run: go test -race ./...
       - name: Build container image
         run: docker build --tag image-handler:test .
-      - name: Smoke-test AVIF transformation in the container
+      - name: Smoke-test AVIF, Unicode and original transformations in the container
         run: |
           docker run --rm --entrypoint sh image-handler:test -ec '
             mkdir -p /images /cache
+            mkdir -p /images/media/homepage_images_body
             vips black /images/source.png 20 10
+            vips black "/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg" 20 10
             APP_IMAGE_ROOT=/images APP_IMAGE_CACHE=/cache image-handler &
             app_pid=$!
             trap "kill $app_pid" EXIT
@@ -52,6 +54,10 @@ jobs:
             test -s /tmp/result.avif
             vipsheader -f width /tmp/result.avif | grep -x 10
             vipsheader -f height /tmp/result.avif | grep -x 5
+            wget -qO /tmp/original.jpg "http://127.0.0.1:80/images/media/homepage_images_body/%D0%A1%D1%83%D0%BC%D0%BA%D0%B0_Wilson_RF_Tournament_9PK_Black______.original.jpg"
+            vipsheader -f width /tmp/original.jpg | grep -x 20
+            vipsheader -f height /tmp/original.jpg | grep -x 10
+            test "$(find /cache/v2 -type f | wc -l)" -eq 2
           '
 
   publish:

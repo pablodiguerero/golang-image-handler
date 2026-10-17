@@ -15,6 +15,8 @@ func TestParsePathLegacyAndModern(t *testing.T) {
 		{"/images/files/realty-fitstrict-200x200.webp", "files/realty.webp", "fitstrict", 100},
 		{"/images/portrait-fit-100x100.avif", "portrait.avif", "fit", 100},
 		{"/images/public+2026/backup@work/photo-fit-100x100.jpg", "public+2026/backup@work/photo.jpg", "fit", 100},
+		{"/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.fitstrict-150x150.jpg", "media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg", "fitstrict", 100},
+		{"/images/media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.original.jpg", "media/homepage_images_body/Сумка_Wilson_RF_Tournament_9PK_Black______.jpg", "original", 100},
 	}
 	for _, test := range tests {
 		spec, err := parsePath(test.path, 8192, 40_000_000)
@@ -38,6 +40,7 @@ func TestParsePathRejectsUnsafeOrUnboundedRequests(t *testing.T) {
 		"/images/files/secret-fill-100x100-q0.jpg",
 		"/images/files/secret-fill-100x100-q101.jpg",
 		"/images/files/secret-fill-100x100.svg",
+		"/images/files/.original.jpg",
 	}
 	for _, path := range paths {
 		if _, err := parsePath(path, 8192, 40_000_000); err == nil {

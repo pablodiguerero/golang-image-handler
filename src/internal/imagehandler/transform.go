@@ -12,6 +12,9 @@ import (
 // libvips can shrink JPEG/WebP on load, so the Go process never holds a decoded
 // full-size image. The fitstrict path needs a second pass to add white padding.
 func transformImage(ctx context.Context, source, output string, spec requestSpec, format outputFormat) error {
+	if spec.operation == "original" {
+		return runVips(ctx, "vips", "copy", source, output+saverOptions(spec.quality, format))
+	}
 	size := fmt.Sprintf("%dx%d", spec.width, spec.height)
 	if spec.operation == "fitstrict" {
 		intermediate := filepath.Join(filepath.Dir(output), "fitted.v")

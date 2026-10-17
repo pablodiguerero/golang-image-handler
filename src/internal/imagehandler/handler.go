@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -22,6 +23,13 @@ import (
 const cacheVersion = "v2"
 
 type transformFunc func(context.Context, string, string, requestSpec, outputFormat) error
+type sourcePixelsFunc func(context.Context, string) (int64, error)
+
+var (
+	errSourcePixels = errors.New("source image exceeds pixel limit")
+	errSourceBytes  = errors.New("source image exceeds size limit")
+	errOutputBytes  = errors.New("generated image exceeds size limit")
+)
 
 type call struct {
 	done chan struct{}
@@ -29,24 +37,27 @@ type call struct {
 }
 
 type Handler struct {
-	root          string
-	cache         string
-	accelPrefix   string
-	allowAVIF     bool
-	allowWebP     bool
-	maxDimension  int
-	maxPixels     int
-	maxSourceSize int64
-	timeout       time.Duration
-	browserTTL    time.Duration
-	cacheTTL      time.Duration
-	cacheMaxBytes int64
-	cleanupEvery  time.Duration
-	semaphore     chan struct{}
-	transform     transformFunc
-	mu            sync.Mutex
-	inflight      map[string]*call
-	stopCleanup   context.CancelFunc
+	root            string
+	cache           string
+	accelPrefix     string
+	allowAVIF       bool
+	allowWebP       bool
+	maxDimension    int
+	maxPixels       int
+	maxSourceSize   int64
+	maxSourcePixels int64
+	maxOutputBytes  int64
+	timeout         time.Duration
+	browserTTL      time.Duration
+	cacheTTL        time.Duration
+	cacheMaxBytes   int64
+	cleanupEvery    time.Duration
+	semaphore       chan struct{}
+	transform       transformFunc
+	sourcePixels    sourcePixelsFunc
+	mu              sync.Mutex
+	inflight        map[string]*call
+	stopCleanup     context.CancelFunc
 }
 
 func NewFromEnv() (*Handler, error) {
@@ -89,6 +100,8 @@ func NewFromEnv() (*Handler, error) {
 	maxDimension := positiveEnvInt("APP_MAX_DIMENSION", 8192)
 	maxPixels := positiveEnvInt("APP_MAX_OUTPUT_PIXELS", 40_000_000)
 	maxSourceSize := int64(positiveEnvInt("APP_MAX_SOURCE_BYTES", 50*1024*1024))
+	maxSourcePixels := int64(positiveEnvInt("APP_MAX_SOURCE_PIXELS", maxPixels))
+	maxOutputBytes := int64(positiveEnvInt("APP_MAX_OUTPUT_BYTES", 50*1024*1024))
 	concurrency := positiveEnvInt("APP_MAX_CONCURRENT_TRANSFORMS", 2)
 	seconds := positiveEnvInt("APP_TRANSFORM_TIMEOUT_SECONDS", 60)
 	browserTTL := positiveEnvDuration("APP_BROWSER_CACHE_TTL_SECONDS", time.Hour)
@@ -100,22 +113,25 @@ func NewFromEnv() (*Handler, error) {
 		return nil, errors.New("APP_ACCEL_REDIRECT_PREFIX must be an absolute URL path")
 	}
 	h := &Handler{
-		root:          root,
-		cache:         cache,
-		accelPrefix:   accelPrefix,
-		allowAVIF:     os.Getenv("APP_ALLOW_AVIF") != "0",
-		allowWebP:     os.Getenv("APP_ALLOW_WEBP") != "0",
-		maxDimension:  maxDimension,
-		maxPixels:     maxPixels,
-		maxSourceSize: maxSourceSize,
-		timeout:       time.Duration(seconds) * time.Second,
-		browserTTL:    browserTTL,
-		cacheTTL:      cacheTTL,
-		cacheMaxBytes: cacheMaxBytes,
-		cleanupEvery:  cleanupEvery,
-		semaphore:     make(chan struct{}, concurrency),
-		transform:     transformImage,
-		inflight:      make(map[string]*call),
+		root:            root,
+		cache:           cache,
+		accelPrefix:     accelPrefix,
+		allowAVIF:       os.Getenv("APP_ALLOW_AVIF") != "0",
+		allowWebP:       os.Getenv("APP_ALLOW_WEBP") != "0",
+		maxDimension:    maxDimension,
+		maxPixels:       maxPixels,
+		maxSourceSize:   maxSourceSize,
+		maxSourcePixels: maxSourcePixels,
+		maxOutputBytes:  maxOutputBytes,
+		timeout:         time.Duration(seconds) * time.Second,
+		browserTTL:      browserTTL,
+		cacheTTL:        cacheTTL,
+		cacheMaxBytes:   cacheMaxBytes,
+		cleanupEvery:    cleanupEvery,
+		semaphore:       make(chan struct{}, concurrency),
+		transform:       transformImage,
+		sourcePixels:    vipsImagePixels,
+		inflight:        make(map[string]*call),
 	}
 	cleanupCtx, cancel := context.WithCancel(context.Background())
 	h.stopCleanup = cancel
@@ -190,11 +206,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	format := negotiateFormat(r.Header.Get("Accept"), h.allowAVIF, h.allowWebP)
-	key := cacheKey(spec, format, info)
+	key := cacheKey(spec, format, info, h.maxSourcePixels, h.maxOutputBytes)
 	cachePath := filepath.Join(h.cache, cacheVersion, key[:2], key+"."+string(format))
 	if !validCacheFile(cachePath) {
 		if err := h.ensureCached(r.Context(), key, cachePath, source, spec, format); err != nil {
 			log.Printf("transform %s: %v", spec.sourceRelative, err)
+			if errors.Is(err, errSourcePixels) || errors.Is(err, errSourceBytes) || errors.Is(err, errOutputBytes) {
+				http.Error(w, "source image exceeds limit", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "image processing failed", http.StatusInternalServerError)
 			return
 		}
@@ -245,8 +265,16 @@ func (h *Handler) source(relative string) (string, os.FileInfo, error) {
 	return resolved, info, nil
 }
 
-func cacheKey(spec requestSpec, format outputFormat, info os.FileInfo) string {
-	data := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%s", cacheVersion, spec, format, info.Size(), info.ModTime().UnixNano(), sourceIdentity(info))
+func cacheKey(spec requestSpec, format outputFormat, info os.FileInfo, maxSourcePixels, maxOutputBytes int64) string {
+	pixelLimit := int64(0)
+	if spec.operation == "original" {
+		// Changing this limit must not keep serving a variant accepted under a
+		// previous, larger value.
+		pixelLimit = maxSourcePixels
+	}
+	// A lower output limit must not keep serving a variant created under a
+	// previous, larger value.
+	data := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%s\x00%d\x00%d", cacheVersion, spec, format, info.Size(), info.ModTime().UnixNano(), sourceIdentity(info), pixelLimit, maxOutputBytes)
 	sum := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(sum[:])
 }
@@ -329,13 +357,107 @@ func (h *Handler) buildCached(ctx context.Context, target, source string, spec r
 	output := filepath.Join(workDir, "image."+string(format))
 	transformCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
-	if err := h.transform(transformCtx, source, output, spec, format); err != nil {
+	transformSource := source
+	if spec.operation == "original" {
+		// Both vipsheader and vips copy must inspect the same bytes. A private
+		// copy prevents a media update from replacing the pathname between those
+		// processes and bypassing the pixel limit.
+		transformSource, err = copySource(transformCtx, h.root, workDir, source, h.maxSourceSize)
+		if err != nil {
+			return err
+		}
+		pixels, err := h.sourcePixels(transformCtx, transformSource)
+		if err != nil {
+			return fmt.Errorf("read source dimensions: %w", err)
+		}
+		if pixels > h.maxSourcePixels {
+			return errSourcePixels
+		}
+	}
+	if err := h.transform(transformCtx, transformSource, output, spec, format); err != nil {
 		return err
 	}
-	if !validCacheFile(output) {
+	info, err := os.Stat(output)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return errors.New("transformer produced an empty or missing image")
 	}
+	if info.Size() > h.maxOutputBytes {
+		return errOutputBytes
+	}
 	return os.Rename(output, target)
+}
+
+func copySource(ctx context.Context, root, workDir, source string, maxBytes int64) (string, error) {
+	input, err := openSourceWithinRoot(root, source)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	info, err := input.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxBytes {
+		return "", errSourceBytes
+	}
+	target := filepath.Join(workDir, "source")
+	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return "", err
+	}
+	defer output.Close()
+	buffer := make([]byte, 32*1024)
+	var written int64
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+		count, readErr := input.Read(buffer)
+		if count > 0 {
+			written += int64(count)
+			if written > maxBytes {
+				return "", errSourceBytes
+			}
+			if _, err := output.Write(buffer[:count]); err != nil {
+				return "", err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+	}
+	return target, nil
+}
+
+func vipsImagePixels(ctx context.Context, source string) (int64, error) {
+	value := func(field string) (int64, error) {
+		output, err := exec.CommandContext(ctx, "vipsheader", "-f", field, source).Output()
+		if err != nil {
+			return 0, fmt.Errorf("vipsheader %s: %w", field, err)
+		}
+		result, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+		if err != nil || result < 1 {
+			return 0, errors.New("invalid source dimensions")
+		}
+		return result, nil
+	}
+	width, err := value("width")
+	if err != nil {
+		return 0, err
+	}
+	height, err := value("height")
+	if err != nil {
+		return 0, err
+	}
+	if width > (1<<63-1)/height {
+		return 0, errSourcePixels
+	}
+	return width * height, nil
 }
 
 func matchesETag(header, etag string) bool {

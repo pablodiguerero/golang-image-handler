@@ -1,3 +1,5 @@
 module image.it-lab.su
 
-go 1.21
+go 1.23.0
+
+require golang.org/x/sys v0.31.0

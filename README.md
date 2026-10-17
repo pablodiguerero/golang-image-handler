@@ -8,9 +8,12 @@ The service creates and caches responsive image variants while preserving the UR
 /images/<directory>/<basename>[.|-]fill-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
 /images/<directory>/<basename>[.|-]fit-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
 /images/<directory>/<basename>[.|-]fitstrict-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
+/images/<directory>/<basename>.original.<jpg|jpeg|png|webp|avif>
 ```
 
 Both the historical dot separator (`photo.fill-200x200.jpg`) and the deployed hyphen separator (`photo-fill-200x200.jpg`) work. `fill` crops from the centre, `fit` preserves the aspect ratio within the requested bounds, and `fitstrict` adds white padding to return the exact requested dimensions. URLs without `-q` keep the historical quality value of 100.
+
+`original` is retained for existing galleries and image links. Basenames may contain Unicode characters, including the Cyrillic product names already stored by deployed sites.
 
 The extension identifies the source file. Response format is negotiated from `Accept`: AVIF takes precedence, then WebP, then JPEG. This lets sites keep all their current URLs while browsers get a modern variant where supported. The response sets `Vary: Accept` and a variant-specific ETag.
 
@@ -27,6 +30,8 @@ The extension identifies the source file. Response format is negotiated from `Ac
 | `APP_MAX_DIMENSION` | `8192` | Maximum requested width or height. |
 | `APP_MAX_OUTPUT_PIXELS` | `40000000` | Maximum width × height. |
 | `APP_MAX_SOURCE_BYTES` | `52428800` | Maximum source file size. |
+| `APP_MAX_SOURCE_PIXELS` | `40000000` | Maximum decoded pixel count for an `original` variant. |
+| `APP_MAX_OUTPUT_BYTES` | `52428800` | Maximum generated variant size. |
 | `APP_MAX_CONCURRENT_TRANSFORMS` | `2` | Process-wide transform limit. |
 | `APP_TRANSFORM_TIMEOUT_SECONDS` | `60` | Per-image transform deadline. |
 | `APP_BROWSER_CACHE_TTL_SECONDS` | `3600` | Browser and CDN HTTP cache TTL. |
