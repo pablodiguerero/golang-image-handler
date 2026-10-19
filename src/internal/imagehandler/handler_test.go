@@ -3,8 +3,11 @@ package imagehandler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -406,5 +409,128 @@ func TestCleanupRemovesExpiredAndOldestFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cacheRoot, "new.jpg")); err != nil {
 		t.Fatalf("new cache entry was removed: %v", err)
+	}
+}
+
+func TestCacheKeysKeepWebPAndAVIFAndChangeJPEG(t *testing.T) {
+	_, source := testHandler(t)
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The formula as it was before the white JPEG background.
+	legacy := func(spec requestSpec, format outputFormat) string {
+		pixelLimit := int64(0)
+		if spec.operation == "original" {
+			pixelLimit = 40_000_000
+		}
+		data := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%s\x00%d\x00%d", cacheVersion, spec, format, info.Size(), info.ModTime().UnixNano(), sourceIdentity(info), pixelLimit, int64(50<<20))
+		sum := sha256.Sum256([]byte(data))
+		return hex.EncodeToString(sum[:])
+	}
+	for _, spec := range []requestSpec{
+		{sourceRelative: "files/realty.jpg", operation: "fill", width: 260, height: 260, quality: 100},
+		{sourceRelative: "files/realty.jpg", operation: "fit", width: 800, height: 600, quality: 60},
+		{sourceRelative: "files/realty.jpg", operation: "fitstrict", width: 250, height: 250, quality: 100},
+		{sourceRelative: "files/realty.jpg", operation: "original", quality: 100},
+	} {
+		for _, format := range []outputFormat{formatWebP, formatAVIF} {
+			if got, want := cacheKey(spec, format, info, 40_000_000, 50<<20), legacy(spec, format); got != want {
+				t.Errorf("%s %s: key changed: %s != %s", spec, format, got, want)
+			}
+		}
+		if got := cacheKey(spec, formatJPEG, info, 40_000_000, 50<<20); got == legacy(spec, formatJPEG) {
+			t.Errorf("%s jpg: key did not change", spec)
+		}
+	}
+}
+
+func TestAllowedSizesHandlerAndAdmin(t *testing.T) {
+	h, _ := testHandler(t)
+	var err error
+	h.allowedSizes, err = parseAllowedSizes("fit-100x100,shrink-500x0,original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.adminToken = "test-token"
+	h.adminMaxPaths = 10
+	h.adminWorkers = 1
+	var transforms atomic.Int32
+	h.transform = func(_ context.Context, _, output string, _ requestSpec, _ outputFormat) error {
+		transforms.Add(1)
+		return os.WriteFile(output, []byte("encoded"), 0644)
+	}
+	for path, want := range map[string]int{
+		"/images/files/realty-fit-100x100.jpg":      http.StatusOK,
+		"/images/files/realty.fit-100x100-q40.jpg":  http.StatusOK, // dot separator and quality
+		"/images/files/realty-shrink-500x0.jpg":     http.StatusOK,
+		"/images/files/realty.original.jpg":         http.StatusOK,
+		"/images/files/realty-fit-101x100.jpg":      http.StatusNotFound,
+		"/images/files/realty.fill-100x100.jpg":     http.StatusNotFound,
+		"/images/files/realty-shrink-500x600.jpg":   http.StatusNotFound,
+		"/images/files/missing-fit-999x999.jpg":     http.StatusNotFound,
+		"/images/files/realty-fit-100x100.svg":      http.StatusBadRequest,
+		"/images/files/realty-shrink-0x0.jpg":       http.StatusBadRequest,
+		"/images/files/../realty-fit-100x100.jpg":   http.StatusBadRequest,
+		"/images/files/realty-fit-100x100-q101.jpg": http.StatusBadRequest,
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Errorf("%s: status=%d want %d", path, w.Code, want)
+		}
+	}
+	before := transforms.Load()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/images/files/realty-fit-101x100.jpg", nil))
+	if w.Code != http.StatusNotFound || transforms.Load() != before {
+		t.Fatalf("unlisted variant did work: status=%d", w.Code)
+	}
+
+	body := []byte(`{"paths":["/images/files/realty-fit-100x100.jpg","/images/files/realty-fit-101x100.jpg"],"formats":["webp"]}`)
+	for _, endpoint := range []func(http.ResponseWriter, *http.Request){h.AdminCacheKeys, h.AdminWarmCache} {
+		request := httptest.NewRequest(http.MethodPost, "/admin/cache/x", bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		endpoint(rec, request)
+		var response struct {
+			Results []adminResult `json:"results"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || len(response.Results) != 2 {
+			t.Fatalf("bad admin response %q: %v", rec.Body.String(), err)
+		}
+		if response.Results[0].Error != "" || len(response.Results[0].Variants) != 1 {
+			t.Errorf("listed path rejected: %+v", response.Results[0])
+		}
+		if response.Results[1].Error != "invalid image path" || len(response.Results[1].Variants) != 0 {
+			t.Errorf("unlisted path accepted: %+v", response.Results[1])
+		}
+	}
+}
+
+func TestDefaultQualityAppliesWithoutExplicitQ(t *testing.T) {
+	h, _ := testHandler(t)
+	h.defaultQuality = 85
+	for path, want := range map[string]int{
+		"/images/files/realty-fit-100x100.jpg":     85,
+		"/images/files/realty-fit-100x100-q40.jpg": 40,
+		"/images/files/realty.original.jpg":        85,
+	} {
+		spec, err := h.parseRequest(path)
+		if err != nil || spec.quality != want {
+			t.Errorf("%s: quality=%d err=%v, want %d", path, spec.quality, err, want)
+		}
+	}
+	h.defaultQuality = 0 // unset in tests: historical 100
+	if spec, _ := h.parseRequest("/images/files/realty-fit-100x100.jpg"); spec.quality != 100 {
+		t.Errorf("default changed: %d", spec.quality)
+	}
+	h.defaultQuality = 85
+	info, _ := os.Stat(filepath.Join(h.root, "files", "realty.jpg"))
+	a, _ := h.parseRequest("/images/files/realty-fit-100x100.jpg")
+	b := a
+	b.quality = 100
+	if cacheKey(a, formatWebP, info, 1, 1) == cacheKey(b, formatWebP, info, 1, 1) {
+		t.Error("quality is not part of the cache key")
 	}
 }

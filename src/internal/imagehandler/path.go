@@ -15,10 +15,14 @@ import (
 // (photo.fill-200x200.jpg), while deployed versions also use a hyphen.
 // A basename may contain Unicode: media libraries commonly retain the
 // uploader's filename (for example, a Cyrillic product name).
-var transformedFilePattern = regexp.MustCompile(`(?i)^(.+)[.-](fill|fit|fitstrict)-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|jpeg|png|webp|avif)$`)
-var originalFilePattern = regexp.MustCompile(`(?i)^(.+)\.original\.(jpg|jpeg|png|webp|avif)$`)
+var transformedFilePattern = regexp.MustCompile(`(?i)^(.+)[.-](fill|fit|fitstrict|shrink)-([0-9]+)x([0-9]+)(?:-q([0-9]+))?\.(jpg|jpeg|png|webp|avif|gif|tif|tiff)$`)
+var originalFilePattern = regexp.MustCompile(`(?i)^(.+)\.original\.(jpg|jpeg|png|webp|avif|gif|tif|tiff)$`)
 
 var errInvalidPath = errors.New("invalid image path")
+
+// errNotAllowed marks a well-formed path whose variant is not listed in
+// APP_ALLOWED_SIZES. The HTTP handler answers it with 404, not 400.
+var errNotAllowed = errors.New("image variant is not allowed")
 
 type requestSpec struct {
 	sourceRelative string
@@ -26,6 +30,11 @@ type requestSpec struct {
 	width          int
 	height         int
 	quality        int
+	// qualitySet is true when the URL carried an explicit -q value.
+	qualitySet bool
+	// zeroWidth and zeroHeight mark an unbounded side of a shrink request. The
+	// width and height fields then hold the substituted maximum dimension.
+	zeroWidth, zeroHeight bool
 }
 
 func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error) {
@@ -80,11 +89,30 @@ func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error)
 		return requestSpec{}, errInvalidPath
 	}
 	height, err := strconv.Atoi(match[4])
-	if err != nil || width < 1 || height < 1 || width > maxDimension || height > maxDimension || width > maxPixels/height {
+	if err != nil {
+		return requestSpec{}, errInvalidPath
+	}
+	operation := strings.ToLower(match[2])
+	var zeroWidth, zeroHeight bool
+	if operation == "shrink" {
+		// Only shrink accepts 0 for one side: that side is unbounded. Both
+		// sides at 0 would not describe any box.
+		if width == 0 && height == 0 {
+			return requestSpec{}, errInvalidPath
+		}
+		if width == 0 {
+			zeroWidth, width = true, maxDimension
+		}
+		if height == 0 {
+			zeroHeight, height = true, maxDimension
+		}
+	}
+	if width < 1 || height < 1 || width > maxDimension || height > maxDimension || width > maxPixels/height {
 		return requestSpec{}, errInvalidPath
 	}
 	quality := 100 // Existing URLs without -q use JPEG/WebP quality 100.
-	if match[5] != "" {
+	qualitySet := match[5] != ""
+	if qualitySet {
 		quality, err = strconv.Atoi(match[5])
 		if err != nil || quality < 1 || quality > 100 {
 			return requestSpec{}, errInvalidPath
@@ -93,10 +121,13 @@ func parsePath(urlPath string, maxDimension, maxPixels int) (requestSpec, error)
 	parts[len(parts)-1] = match[1] + "." + match[6]
 	return requestSpec{
 		sourceRelative: path.Join(parts...),
-		operation:      strings.ToLower(match[2]),
+		operation:      operation,
 		width:          width,
 		height:         height,
 		quality:        quality,
+		qualitySet:     qualitySet,
+		zeroWidth:      zeroWidth,
+		zeroHeight:     zeroHeight,
 	}, nil
 }
 
@@ -164,4 +195,85 @@ func negotiateFormat(accept string, allowAVIF, allowWebP bool) outputFormat {
 
 func (s requestSpec) String() string {
 	return fmt.Sprintf("%s:%s:%dx%d:q%d", s.sourceRelative, s.operation, s.width, s.height, s.quality)
+}
+
+// token is the APP_ALLOWED_SIZES form of the variant: quality is not part of it
+// and the separator is always the hyphen, whatever the URL used.
+func (s requestSpec) token() string {
+	if s.operation == "original" {
+		return "original"
+	}
+	width, height := s.width, s.height
+	if s.zeroWidth {
+		width = 0
+	}
+	if s.zeroHeight {
+		height = 0
+	}
+	return fmt.Sprintf("%s-%dx%d", s.operation, width, height)
+}
+
+var allowedTokenPattern = regexp.MustCompile(`^(fill|fit|fitstrict|shrink)-([0-9]+)x([0-9]+)$`)
+
+// parseAllowedSizes reads APP_ALLOWED_SIZES. An empty value allows everything
+// and yields a nil set.
+func parseAllowedSizes(value string) (map[string]bool, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	allowed := make(map[string]bool)
+	for _, raw := range strings.Split(value, ",") {
+		token := strings.ToLower(strings.TrimSpace(raw))
+		if token == "original" {
+			allowed[token] = true
+			continue
+		}
+		match := allowedTokenPattern.FindStringSubmatch(token)
+		if match == nil {
+			return nil, fmt.Errorf("APP_ALLOWED_SIZES: invalid token %q (want <fill|fit|fitstrict|shrink>-<W>x<H> or original)", raw)
+		}
+		width, errW := strconv.Atoi(match[2])
+		height, errH := strconv.Atoi(match[3])
+		if errW != nil || errH != nil || width < 0 || height < 0 {
+			return nil, fmt.Errorf("APP_ALLOWED_SIZES: invalid size in token %q", raw)
+		}
+		if match[1] == "shrink" {
+			if width == 0 && height == 0 {
+				return nil, fmt.Errorf("APP_ALLOWED_SIZES: token %q has both sides 0", raw)
+			}
+		} else if width < 1 || height < 1 {
+			return nil, fmt.Errorf("APP_ALLOWED_SIZES: token %q must have both sides >= 1", raw)
+		}
+		allowed[fmt.Sprintf("%s-%dx%d", match[1], width, height)] = true
+	}
+	return allowed, nil
+}
+
+// parseDefaultQuality reads APP_DEFAULT_QUALITY; unset means 100.
+func parseDefaultQuality(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 100, nil
+	}
+	quality, err := strconv.Atoi(value)
+	if err != nil || quality < 1 || quality > 100 {
+		return 0, fmt.Errorf("APP_DEFAULT_QUALITY must be an integer from 1 to 100, got %q", value)
+	}
+	return quality, nil
+}
+
+// parseRequest parses the path and applies the per-deployment settings: the
+// variant allowlist and the default quality for URLs without -q.
+func (h *Handler) parseRequest(urlPath string) (requestSpec, error) {
+	spec, err := parsePath(urlPath, h.maxDimension, h.maxPixels)
+	if err != nil {
+		return requestSpec{}, err
+	}
+	if h.allowedSizes != nil && !h.allowedSizes[spec.token()] {
+		return requestSpec{}, errNotAllowed
+	}
+	if !spec.qualitySet && h.defaultQuality > 0 {
+		spec.quality = h.defaultQuality
+	}
+	return spec, nil
 }

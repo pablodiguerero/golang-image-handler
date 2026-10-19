@@ -16,6 +16,10 @@ func transformImage(ctx context.Context, source, output string, spec requestSpec
 		return runVips(ctx, "vips", "copy", source, output+saverOptions(spec.quality, format))
 	}
 	size := fmt.Sprintf("%dx%d", spec.width, spec.height)
+	if spec.operation == "shrink" {
+		// The trailing ">" only ever shrinks: smaller sources keep their size.
+		size += ">"
+	}
 	if spec.operation == "fitstrict" {
 		intermediate := filepath.Join(filepath.Dir(output), "fitted.v")
 		if err := runVips(ctx, "vipsthumbnail", source, "--size", size, "--output", intermediate); err != nil {
@@ -34,6 +38,10 @@ func transformImage(ctx context.Context, source, output string, spec requestSpec
 func saverOptions(quality int, format outputFormat) string {
 	if format == formatAVIF {
 		return fmt.Sprintf("[Q=%d,effort=2]", quality)
+	}
+	if format == formatJPEG {
+		// JPEG has no alpha: flatten transparency onto white (vips defaults to black).
+		return fmt.Sprintf("[Q=%d,background=255]", quality)
 	}
 	return fmt.Sprintf("[Q=%d]", quality)
 }

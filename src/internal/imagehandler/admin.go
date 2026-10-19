@@ -105,7 +105,7 @@ func (h *Handler) planAdminRequest(request adminRequest, formats []outputFormat)
 	plans := make([]*adminPlan, 0, len(request.Paths))
 	for _, requestPath := range request.Paths {
 		result := &adminResult{Path: requestPath}
-		spec, err := parsePath(requestPath, h.maxDimension, h.maxPixels)
+		spec, err := h.parseRequest(requestPath)
 		if err != nil {
 			result.Error = "invalid image path"
 			plans = append(plans, &adminPlan{result: result})
