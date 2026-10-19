@@ -55,6 +55,8 @@ type Handler struct {
 	adminToken      string
 	adminMaxPaths   int
 	adminWorkers    int
+	allowedSizes    map[string]bool // nil allows every variant
+	defaultQuality  int             // 0 means 100
 	semaphore       chan struct{}
 	transform       transformFunc
 	sourcePixels    sourcePixelsFunc
@@ -119,6 +121,14 @@ func NewFromEnv() (*Handler, error) {
 	if accelPrefix != "" && (!strings.HasPrefix(accelPrefix, "/") || strings.Contains(accelPrefix, "..")) {
 		return nil, errors.New("APP_ACCEL_REDIRECT_PREFIX must be an absolute URL path")
 	}
+	allowedSizes, err := parseAllowedSizes(os.Getenv("APP_ALLOWED_SIZES"))
+	if err != nil {
+		return nil, err
+	}
+	defaultQuality, err := parseDefaultQuality(os.Getenv("APP_DEFAULT_QUALITY"))
+	if err != nil {
+		return nil, err
+	}
 	h := &Handler{
 		root:            root,
 		cache:           cache,
@@ -138,6 +148,8 @@ func NewFromEnv() (*Handler, error) {
 		adminToken:      adminToken,
 		adminMaxPaths:   positiveEnvInt("APP_ADMIN_MAX_PATHS", 500),
 		adminWorkers:    positiveEnvInt("APP_ADMIN_WARM_WORKERS", concurrency),
+		allowedSizes:    allowedSizes,
+		defaultQuality:  defaultQuality,
 		semaphore:       make(chan struct{}, concurrency),
 		transform:       transformImage,
 		sourcePixels:    vipsImagePixels,
@@ -211,7 +223,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	spec, err := parsePath(r.URL.Path, h.maxDimension, h.maxPixels)
+	spec, err := h.parseRequest(r.URL.Path)
+	if errors.Is(err, errNotAllowed) {
+		http.NotFound(w, r)
+		return
+	}
 	if err != nil {
 		http.Error(w, "invalid image path", http.StatusBadRequest)
 		return
@@ -300,6 +316,11 @@ func cacheKey(spec requestSpec, format outputFormat, info os.FileInfo, maxSource
 	// A lower output limit must not keep serving a variant created under a
 	// previous, larger value.
 	data := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%s\x00%d\x00%d", cacheVersion, spec, format, info.Size(), info.ModTime().UnixNano(), sourceIdentity(info), pixelLimit, maxOutputBytes)
+	if format == formatJPEG {
+		// JPEG variants are now flattened onto white instead of black. The marker
+		// retires the old cached JPEGs while WebP/AVIF keys stay unchanged.
+		data += "\x00jpeg-bg-white"
+	}
 	sum := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(sum[:])
 }

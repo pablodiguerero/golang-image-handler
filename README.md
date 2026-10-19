@@ -5,17 +5,20 @@ The service creates and caches responsive image variants while preserving the UR
 ## Existing URLs remain valid
 
 ```
-/images/<directory>/<basename>[.|-]fill-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
-/images/<directory>/<basename>[.|-]fit-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
-/images/<directory>/<basename>[.|-]fitstrict-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif>
-/images/<directory>/<basename>.original.<jpg|jpeg|png|webp|avif>
+/images/<directory>/<basename>[.|-]fill-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif|gif|tif|tiff>
+/images/<directory>/<basename>[.|-]fit-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif|gif|tif|tiff>
+/images/<directory>/<basename>[.|-]fitstrict-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif|gif|tif|tiff>
+/images/<directory>/<basename>[.|-]shrink-<width>x<height>[-q<1..100>].<jpg|jpeg|png|webp|avif|gif|tif|tiff>
+/images/<directory>/<basename>.original.<jpg|jpeg|png|webp|avif|gif|tif|tiff>
 ```
 
-Both the historical dot separator (`photo.fill-200x200.jpg`) and the deployed hyphen separator (`photo-fill-200x200.jpg`) work. `fill` crops from the centre, `fit` preserves the aspect ratio within the requested bounds, and `fitstrict` adds white padding to return the exact requested dimensions. URLs without `-q` keep the historical quality value of 100.
+Both the historical dot separator (`photo.fill-200x200.jpg`) and the deployed hyphen separator (`photo-fill-200x200.jpg`) work. `fill` crops from the centre, `fit` preserves the aspect ratio within the requested bounds, and `fitstrict` adds white padding to return the exact requested dimensions. URLs without `-q` use quality 100 unless `APP_DEFAULT_QUALITY` sets another value.
+
+`shrink` fits the image inside the box like `fit` but never upscales: a source smaller than the box keeps its size. For `shrink` only, one side may be `0`, meaning unbounded on that side (`shrink-1920x0` limits the width only); both sides `0` is invalid. The other operations require both sides to be at least 1.
 
 `original` is retained for existing galleries and image links. Basenames may contain Unicode characters, including the Cyrillic product names already stored by deployed sites.
 
-The extension identifies the source file. Response format is negotiated from `Accept`: AVIF takes precedence, then WebP, then JPEG. This lets sites keep all their current URLs while browsers get a modern variant where supported. The response sets `Vary: Accept` and a variant-specific ETag.
+The extension identifies the source file. Sources may be `jpg`, `jpeg`, `png`, `webp`, `avif`, `gif`, `tif` or `tiff` (case-insensitive); an animated GIF yields its first frame. JPEG output is flattened onto a white background, so transparent sources no longer turn black; WebP and AVIF keep their alpha channel. Response format is negotiated from `Accept`: AVIF takes precedence, then WebP, then JPEG. This lets sites keep all their current URLs while browsers get a modern variant where supported. The response sets `Vary: Accept` and a variant-specific ETag.
 
 ## Environment
 
@@ -38,9 +41,15 @@ The extension identifies the source file. Response format is negotiated from `Ac
 | `APP_CACHE_TTL_SECONDS` | `604800` | Delete generated variants older than this age. |
 | `APP_CACHE_CLEANUP_INTERVAL_SECONDS` | `86400` | Run generated-cache cleanup once per day. |
 | `APP_CACHE_MAX_BYTES` | `10737418240` | Evict oldest generated variants after this size. |
+| `APP_ALLOWED_SIZES` | unset | Comma-separated allowlist of variants, for example `fill-260x260,shrink-500x700,shrink-1920x0,original`. Tokens are `<operation>-<W>x<H>` or `original`; quality is not part of a token. Unset or empty allows everything. |
+| `APP_DEFAULT_QUALITY` | `100` | Quality (1..100) for URLs without `-q`. An invalid value stops the service at startup. |
 | `APP_ADMIN_TOKEN` or `APP_ADMIN_TOKEN_FILE` | unset | Enables the protected cache administration API. |
 | `APP_ADMIN_MAX_PATHS` | `500` | Maximum paths in one cache administration request. |
 | `APP_ADMIN_WARM_WORKERS` | transform limit | Concurrent warm tasks; transform concurrency remains capped independently. |
+
+## Restricting variants
+
+When `APP_ALLOWED_SIZES` is set, a request for any other variant returns 404 without doing any work, and the cache administration API reports such paths as `invalid image path`. The hyphen form is used in the list whichever separator the URL uses (`photo.fill-260x260.jpg` matches `fill-260x260`). An invalid token stops the service at startup with a message naming the variable.
 
 ## Cache administration API
 
